@@ -1,0 +1,8 @@
+# Data
+data/history/*.csv
+data/cache/*.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/

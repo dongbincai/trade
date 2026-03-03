@@ -85,3 +85,17 @@ The skill itself tells you which.
 ## User Instructions
 
 Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
+
+## 利弗莫尔三文件联动规则（特殊）
+
+利弗莫尔交易系统由三个不可分割的SKILL组成。**触发任何一个就必须全部三个一起加载**：
+
+| 文件 | 角色 |
+|------|------|
+| livermore-trading | 🧠 大脑：哲学、铁律、做多做空框架 |
+| livermore-pivotal-points | 🎯 关键点：识别、强度、结构速查 |
+| trading-system | 📡 数据源：获取协议、工作流、信号评估 |
+
+**触发条件**：用户提到股票/板块/市场/交易/持仓/止损/加仓/做空/利弗莫尔/趋势/关键点 → 三文件全部加载 + portfolio.md + trades.md
+
+**只加载一个就开始分析 = 违规。利弗莫尔是一个完整的人，不能只加载他的一只手。**
