@@ -691,6 +691,7 @@ def full_analysis(df: pd.DataFrame, ticker: str = "") -> dict:
         "key_levels": compute_key_levels(df),
         "volume_profile": compute_volume_profile(df),
         "recent_bars": get_recent_bars(df),
+        "swing_points": find_swing_points(df),
         "swing_sequence": build_swing_sequence(df),
         "price_zones": find_price_zones(df),
         "adjacent_structures": find_adjacent_structures(df),

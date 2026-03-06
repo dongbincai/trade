@@ -160,7 +160,7 @@ def invalidate_quote_cache(ticker: str | None = None):
 
 def get_quote(ticker: str, use_cache: bool = True) -> dict:
     """
-    获取当前报价快照。
+    获取当前报价快照（含盘前盘后数据）。
     use_cache=True 时 30 秒内重复调用返回缓存值（默认）。
     """
     key = ticker.upper()
@@ -186,20 +186,45 @@ def get_quote(ticker: str, use_cache: bool = True) -> dict:
                     if avg_vol > 0:
                         vol_ratio = round(volume / avg_vol, 2)
 
+        last_price = round(info.last_price, 2) if info.last_price else None
+        prev_close = round(info.previous_close, 2) if info.previous_close else None
+
         result = {
             "ticker": key,
-            "price": round(info.last_price, 2) if info.last_price else None,
+            "price": last_price,
             "open": round(info.open, 2) if info.open else None,
             "high": round(info.day_high, 2) if info.day_high else None,
             "low": round(info.day_low, 2) if info.day_low else None,
             "volume": volume,
             "vol_ratio": vol_ratio,  # 量比：>1.5 放量, <0.5 缩量
-            "prev_close": round(info.previous_close, 2) if info.previous_close else None,
+            "prev_close": prev_close,
             "market_cap": info.market_cap if info.market_cap else None,
             "change_pct": round(
-                (info.last_price - info.previous_close) / info.previous_close * 100, 2
-            ) if info.last_price and info.previous_close else None,
+                (last_price - prev_close) / prev_close * 100, 2
+            ) if last_price and prev_close else None,
         }
+
+        # 盘前盘后数据 (pre/post market from yfinance quote_type / summary)
+        try:
+            qinfo = t.info  # full info dict, includes pre/post market
+            pre_price = qinfo.get("preMarketPrice")
+            post_price = qinfo.get("postMarketPrice")
+
+            # 盘前/盘后涨跌幅：基于常规收盘价计算（而非 yfinance 的 changePercent 字段，
+            # 那个字段不同版本含义不一致，有时是小数有时已是百分比）
+            if pre_price and last_price:
+                result["pre_market"] = {
+                    "price": round(pre_price, 2),
+                    "change_pct": round((pre_price - last_price) / last_price * 100, 2),
+                }
+            if post_price and last_price:
+                result["post_market"] = {
+                    "price": round(post_price, 2),
+                    "change_pct": round((post_price - last_price) / last_price * 100, 2),
+                }
+        except Exception:
+            pass  # 盘前盘后非关键，失败不阻塞
+
         # 写入缓存
         _quote_cache[key] = (datetime.now().timestamp(), result)
         return result
@@ -306,6 +331,7 @@ def get_stock_info(ticker: str, force_refresh: bool = False) -> dict:
 # ──────────────────────────────────────────
 
 # 主要板块 ETF — 用于板块轮动扫描
+# 第一组：11 大 GICS 板块（SPDR）
 SECTOR_ETFS = {
     "XLK": "科技",
     "XLF": "金融",
@@ -320,11 +346,34 @@ SECTOR_ETFS = {
     "XLC": "通信",
 }
 
+# 第二组：主题/商品板块 — 更细粒度的轮动信号
+THEME_ETFS = {
+    # 贵金属 & 商品
+    "GLD": "黄金",
+    "SLV": "白银",
+    "GDX": "金矿股",
+    # 细分行业
+    "SMH": "半导体",
+    "XBI": "生物科技",
+    "XOP": "油气勘探",
+    "XHB": "住宅建筑",
+    "IYT": "交运",
+    # 主题
+    "KWEB": "中概互联",
+    "HACK": "网络安全",
+    "TAN": "清洁能源",
+    "ROBO": "机器人/AI",
+}
 
-def get_sector_performance() -> list[dict]:
-    """获取板块 ETF 当日表现，按涨跌幅排序。"""
+# 合并：完整板块字典（用于 get_sector_history 等全面扫描）
+ALL_ETFS = {**SECTOR_ETFS, **THEME_ETFS}
+
+
+def get_sector_performance(include_themes: bool = True) -> list[dict]:
+    """获取板块 ETF 当日表现，按涨跌幅排序。include_themes=True 时包含主题板块。"""
     results = []
-    for etf, name in SECTOR_ETFS.items():
+    etfs = ALL_ETFS if include_themes else SECTOR_ETFS
+    for etf, name in etfs.items():
         q = get_quote(etf)
         if "error" not in q:
             results.append({
@@ -381,7 +430,7 @@ def get_sector_leaders(etf: str = None, top_n: int = 5, period: str = "1mo") -> 
         ]}, ...]
     """
     if etf:
-        etfs_to_scan = [(etf.upper(), SECTOR_ETFS.get(etf.upper(), etf.upper()))]
+        etfs_to_scan = [(etf.upper(), ALL_ETFS.get(etf.upper(), etf.upper()))]
     else:
         # 自动取领涨前 3 板块
         sectors = get_sector_performance()
@@ -433,7 +482,7 @@ def get_top_movers(top_n: int = 20, period: str = "1d") -> dict:
     """
     # 收集所有板块 ETF 的持仓
     all_tickers = set()
-    for etf in SECTOR_ETFS:
+    for etf in ALL_ETFS:
         holdings = get_etf_holdings(etf, top_n=10)
         all_tickers.update(holdings)
 
@@ -482,7 +531,7 @@ def get_sector_history(days: int = 30) -> list[dict]:
 
     返回每个板块的 1d / 5d / 1mo 涨幅，按1月涨幅排序。
     """
-    etf_list = list(SECTOR_ETFS.keys())
+    etf_list = list(ALL_ETFS.keys())
     try:
         data = yf.download(etf_list, period=f"{days + 5}d", progress=False, threads=True)
         if data.empty:
@@ -521,7 +570,7 @@ def get_sector_history(days: int = 30) -> list[dict]:
 
             results.append({
                 "etf": etf,
-                "sector": SECTOR_ETFS[etf],
+                "sector": ALL_ETFS[etf],
                 "price": round(float(last_price), 2),
                 "chg_1d": chg_1d,
                 "chg_5d": chg_5d,
@@ -556,9 +605,15 @@ def _safe_pct(series: pd.Series, lookback: int) -> float | None:
 SECTOR_MEMBERS = {
     "自动驾驶": ["PONY", "WRD", "TSLA", "GOOGL", "GM", "MBLY"],
     "AI/半导体": ["NVDA", "AMD", "AVGO", "TSM", "INTC", "QCOM"],
-    "中概": ["BABA", "JD", "PDD", "BIDU", "NIO", "XPEV", "LI"],
+    "中概": ["BABA", "JD", "PDD", "BIDU", "NIO", "XPEV", "LI", "PONY", "WRD"],
     "能源": ["XOM", "CVX", "COP", "OXY", "SLB", "EOG"],
     "金融": ["JPM", "BAC", "GS", "MS", "WFC", "C"],
+    "贵金属": ["NEM", "GOLD", "AEM", "FNV", "WPM", "RGLD"],
+    "网络安全": ["CRWD", "PANW", "ZS", "FTNT", "S", "NET"],
+    "生物科技": ["AMGN", "GILD", "VRTX", "REGN", "MRNA", "BIIB"],
+    "机器人/AI": ["ISRG", "ROK", "TER", "PONY", "PATH", "PLTR"],
+    "AI企业软件": ["NOW", "CRM", "WDAY", "SNOW", "PLTR", "DDOG"],
+    "广告科技": ["APP", "TTD", "DV", "MGNI", "PUBM", "DSP"],
 }
 
 
@@ -689,13 +744,62 @@ def full_analysis(ticker: str) -> dict:
         "key_levels": _analysis.compute_key_levels(df),
         "volume_profile": _analysis.compute_volume_profile(df),
         "recent_bars": _analysis.get_recent_bars(df),
+        "swing_points": _analysis.find_swing_points(df),
         "swing_sequence": _analysis.build_swing_sequence(df),
         "price_zones": _analysis.find_price_zones(df),
         "adjacent_structures": _analysis.find_adjacent_structures(df),
         "gaps": _analysis.find_gaps(df),
         "sisters": get_sister_comparison(ticker),
-        "market": {
+    }
+
+
+def livermore_briefing(tickers: list[str], include_market: bool = True) -> dict:
+    """
+    利弗莫尔完整简报 — 一次性获取所有分析所需数据。
+
+    这是 AI 的主入口：调用一次，获得完整的价格记录本。
+    后续按需手动获取补充数据。
+
+    包含：
+      【市场层】
+        - 大盘概览（SPY / QQQ）
+        - 板块排行（当日涨跌幅）
+        - 板块多周期强度（1d / 5d / 1mo + 趋势标签）
+        - 领涨板块领头羊
+      【个股层】每只股票：
+        - 实时报价 + 元数据
+        - 关键位坐标（52w/3m/1m）
+        - 量价结构（多窗口）
+        - 摆动高低点 + HH/HL/LH/LL 序列
+        - 价格区间 + 相邻结构 + 缺口
+        - 姐妹股对比
+        - 近期 K 线
+
+    参数：
+        tickers: 股票列表
+        include_market: 是否包含市场层数据（默认 True）
+
+    返回：
+        完整 JSON 结构，AI 直接消费。
+    """
+    result = {
+        "generated_at": datetime.now(_ET).isoformat(),
+        "tickers": [t.upper() for t in tickers],
+    }
+
+    # ── 市场层 ──
+    if include_market:
+        result["market"] = {
             "spy": get_quote("SPY"),
             "qqq": get_quote("QQQ"),
-        },
-    }
+            "sectors": get_sector_performance(),
+            "sector_trend": get_sector_history(),
+            "leaders": get_sector_leaders(),  # 领涨前 3 板块的领头羊
+        }
+
+    # ── 个股层 ──
+    result["stocks"] = {}
+    for ticker in tickers:
+        result["stocks"][ticker.upper()] = full_analysis(ticker)
+
+    return result

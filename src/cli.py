@@ -21,6 +21,8 @@
   python src/cli.py movers 1mo             # 全市场近1月涨跌幅前20
   python src/cli.py trend                   # 板块多周期强度（1d/5d/1mo）
   python src/cli.py analyze PONY            # 完整分析（利弗莫尔价格记录本）
+  python src/cli.py brief PONY WRD           # ⭐ 利弗莫尔简报（市场+个股一次性获取）
+  python src/cli.py brief PONY --no-market   # 简报（跳过市场层数据）
   python src/cli.py watch                   # 盯盘模式（所有已同步股票，30s刷新）
   python src/cli.py watch PONY WRD          # 盯盘指定股票
   python src/cli.py watch PONY 10           # 指定刷新间隔（秒）
@@ -48,6 +50,7 @@ from market_data import (
     get_sister_comparison,
     get_top_movers,
     invalidate_quote_cache,
+    livermore_briefing,
     sync_history,
 )
 
@@ -315,6 +318,34 @@ def cmd_analyze(tickers):
         print(fmt(full_analysis(t)))
 
 
+def cmd_brief(raw_args):
+    """
+    ⭐ 利弗莫尔简报 — 一次性获取市场全景 + 个股全套数据。
+    AI 的主入口：调用一次，获得利弗莫尔分析所需的一切。
+    """
+    tickers = []
+    include_market = True
+    for a in raw_args:
+        if a.upper() in ("--NO-MARKET", "-NM"):
+            include_market = False
+        else:
+            tickers.append(a)
+
+    if not tickers:
+        print("用法: brief TICKER [TICKER ...] [--no-market]")
+        print("  一次性获取利弗莫尔分析所需的所有数据：")
+        print("    市场层: SPY/QQQ + 板块排行 + 多周期强度 + 领头羊")
+        print("    个股层: 报价 + 关键位 + 量价 + 摆动点 + 序列 + 区间 + 结构 + 缺口 + 姐妹股")
+        return
+
+    market_tag = "含市场全景" if include_market else "仅个股"
+    print(f"⭐ 利弗莫尔简报 | {', '.join(tickers)} | {market_tag}")
+    print(f"{'=' * 60}")
+
+    data = livermore_briefing(tickers, include_market=include_market)
+    print(fmt(data))
+
+
 def cmd_watch(tickers, interval=30):
     """
     盯盘模式：每 interval 秒刷新一次持仓/关注股票的实时报价。
@@ -401,6 +432,7 @@ def main():
         "movers": lambda: cmd_movers(args),
         "trend": lambda: cmd_trend(),
         "analyze": lambda: cmd_analyze(args),
+        "brief": lambda: cmd_brief(sys.argv[2:]),  # 保留原始大小写（--no-market 参数）
         "watch": lambda: _dispatch_watch(args),
     }
 
